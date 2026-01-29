@@ -45,27 +45,99 @@ except FileNotFoundError:
     pass
 
 # -----------------------------
-# Sample CSV (for first-time users)
+# Sample CSV (matches 2025_bio.csv structure)
 # -----------------------------
-sample_csv = pd.DataFrame({
-    "Date": pd.to_datetime([
-        "2026-04-15", "2026-04-29", "2026-05-13",
-        "2026-04-15", "2026-04-29", "2026-05-13"
-    ]),
-    "Bag": [
-        "SAMPLE_A", "SAMPLE_A", "SAMPLE_A",
-        "SAMPLE_B", "SAMPLE_B", "SAMPLE_B"
-    ],
-    "Count": [200, 198, 198, 200, 199, 199],
-    "weight_g": [4200, 4554, 4980, 4100, 4480, 4920],
-})
-
-st.sidebar.download_button(
-    "Download sample CSV",
-    sample_csv.to_csv(index=False),
-    file_name="sample_oyster_sampling.csv",
-    mime="text/csv",
-)
+# Prefer serving a static file if it exists in the repo; otherwise fall back to embedded text.
+try:
+    with open("sample_oyster_sampling.csv", "rb") as f:
+        st.sidebar.download_button(
+            "Download sample CSV",
+            f,
+            file_name="sample_oyster_sampling.csv",
+            mime="text/csv",
+        )
+except FileNotFoundError:
+    sample_csv_text = """Bag,Date,Count,weight_g
+    1,2025-06-04,200,1995.8048
+    35,2025-06-04,200,1773.54472
+    27,2025-06-04,200,2213.52896
+    31,2025-06-04,200,1945.90968
+    36,2025-06-04,200,2118.27464
+    37,2025-06-04,200,1940.72744
+    1,2025-06-17,197,2598.1132
+    35,2025-06-17,200,2165.2192
+    27,2025-06-17,199,2544.7408
+    31,2025-06-17,200,2392.8668
+    36,2025-06-17,198,2735.0712
+    37,2025-06-17,199,2591.4032
+    1,2025-07-03,198,3368.0376
+    35,2025-07-03,197,2687.8152
+    27,2025-07-03,197,3224.8744
+    31,2025-07-03,198,2898.3888
+    36,2025-07-03,198,2975.56352
+    37,2025-07-03,199,3201.2928
+    1,2025-07-23,195,4960.9952
+    35,2025-07-23,194,3904.0064
+    27,2025-07-23,196,4572.3168
+    31,2025-07-23,196,4123.9328
+    36,2025-07-23,197,4271.592
+    37,2025-07-23,197,4484.2752
+    1,2025-08-05,195,6216.7064
+    35,2025-08-05,193,4754.5016
+    27,2025-08-05,195,6038.61
+    31,2025-08-05,195,5292.3384
+    36,2025-08-05,195,5674.8136
+    37,2025-08-05,195,6038.5736
+    1,2025-09-01,192,8481.0368
+    35,2025-09-01,193,6951.5624
+    27,2025-09-01,193,8403.5904
+    31,2025-09-01,194,7732.9736
+    36,2025-09-01,194,8173.1464
+    37,2025-09-01,194,8513.9976
+    1,2025-09-09,190,10195.632
+    35,2025-09-09,193,8685.8824
+    27,2025-09-09,191,10362.6288
+    31,2025-09-09,192,9571.6416
+    36,2025-09-09,192,10027.5168
+    37,2025-09-09,192,10402.4784
+    1,2025-09-17,190,11867.952
+    35,2025-09-17,192,9917.3536
+    27,2025-09-17,190,11885.07
+    31,2025-09-17,191,10910.7352
+    36,2025-09-17,191,11568.903
+    37,2025-09-17,191,11950.597
+    1,2025-09-15,189,11546.272
+    35,2025-09-15,191,9624.168
+    27,2025-09-15,189,11478.69024
+    31,2025-09-15,191,7724.67176
+    36,2025-09-15,190,11207.40744
+    37,2025-09-15,190,11632.0812
+    1,2025-10-16,185,16948.187
+    35,2025-10-16,189,13858.4178
+    27,2025-10-16,185,16766.678
+    31,2025-10-16,188,15620.7464
+    36,2025-10-16,188,16531.407
+    37,2025-10-16,188,17081.4104
+    1,2025-10-23,183,19190.404
+    35,2025-10-23,188,15722.6792
+    27,2025-10-23,183,18905.556
+    31,2025-10-23,186,17533.6312
+    36,2025-10-23,186,18608.3832
+    37,2025-10-23,186,19316.6912
+    1,2025-10-30,181,21704.904
+    35,2025-10-30,186,17777.2712
+    27,2025-10-30,181,21444.762
+    31,2025-10-30,184,19770.8072
+    36,2025-10-30,184,21197.6824
+    37,2025-10-30,184,21940.0656
+    """
+    sample_csv_text = "\n".join([line.strip() for line in sample_csv_text.strip().splitlines()]) + "\n"
+    st.sidebar.download_button(
+        "Download sample CSV",
+        sample_csv_text,
+        file_name="sample_oyster_sampling.csv",
+        mime="text/csv",
+    )
 
 # -----------------------------
 # Helpers
@@ -89,8 +161,82 @@ def in_window(d, start_md, end_md):
 # Main logic
 # -----------------------------
 if uploaded:
-    dd = pd.read_csv(uploaded, parse_dates=["Date"])
-    dd = dd.sort_values(["Bag","Date"]).reset_index(drop=True)
+    # -----------------------------
+    # Robust CSV load + normalization
+    # -----------------------------
+    dd = pd.read_csv(uploaded)
+    dd.columns = dd.columns.map(lambda c: str(c).replace("\ufeff", ""))
+
+    # Normalize column names: strip whitespace, lower-case, replace spaces with underscores
+    dd.columns = (
+        dd.columns.astype(str)
+          .str.strip()
+          .str.replace(r"\s+", "_", regex=True)
+          .str.lower()
+    )
+
+    # Drop common blank columns from Excel exports (e.g., "Unnamed: 4")
+    dd = dd.loc[:, ~dd.columns.astype(str).str.startswith("unnamed")].copy()
+
+    # Map common variants to expected names
+    rename_map = {
+        "date": "Date",
+        "sample_date": "Date",
+        "sampling_date": "Date",
+        "bag": "Bag",
+        "bag_id": "Bag",
+        "bagid": "Bag",
+        "count": "Count",
+        "n": "Count",
+        "num": "Count",
+        "number": "Count",
+        "weight_g": "weight_g",
+        "weight": "weight_g",
+        "total_weight_g": "weight_g",
+        "biomass_g": "weight_g",
+        "avg_weight_g": "Avg_Weight_g",
+        "average_weight_g": "Avg_Weight_g",
+        "avg_wt_g": "Avg_Weight_g",
+        "mean_weight_g": "Avg_Weight_g",
+    }
+    dd = dd.rename(columns={c: rename_map[c] for c in dd.columns if c in rename_map})
+
+    # Validate required columns before sorting/processing
+    required_base = {"Date", "Bag"}
+    missing_base = sorted(required_base - set(dd.columns))
+    if missing_base:
+        st.error(
+            "Your CSV is missing required column(s): "
+            + ", ".join(missing_base)
+            + "\n\nFound columns: "
+            + ", ".join(list(dd.columns))
+        )
+        st.stop()
+
+    # Parse Date safely
+    dd["Date"] = pd.to_datetime(dd["Date"], errors="coerce")
+    if dd["Date"].isna().all():
+        st.error("Could not parse any dates in the 'Date' column. Please use a recognizable date format (e.g., 2025-06-04).")
+        st.stop()
+
+    # Drop rows without Date/Bag
+    dd = dd.dropna(subset=["Date", "Bag"]).copy()
+
+    # Ensure Bag is a clean string key
+    dd["Bag"] = dd["Bag"].astype(str).str.strip()
+
+    # Clean numeric columns (tolerate a few missing values)
+    if "Count" in dd.columns:
+        dd["Count"] = pd.to_numeric(dd["Count"], errors="coerce")
+        # If a couple rows are missing Count, forward/back fill within each bag
+        dd["Count"] = dd.groupby("Bag")["Count"].ffill().bfill()
+
+    if "weight_g" in dd.columns:
+        dd["weight_g"] = pd.to_numeric(dd["weight_g"], errors="coerce")
+
+    dd = dd.sort_values(["Bag", "Date"]).reset_index(drop=True)
+
+    st.caption("Expected columns: Date, Bag, and either Avg_Weight_g or (weight_g + Count). Column names are case/space-insensitive.")
 
     # Ensure Avg_Weight_g
     if "Avg_Weight_g" not in dd.columns:
