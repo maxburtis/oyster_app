@@ -7,6 +7,15 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(layout="wide")
 st.title("🦪 Oyster Calculator")
+st.markdown(
+    """
+**Sampling Protocol & App Guide:**  
+👉 [View the README](README.md)
+
+**Credits:**  
+This work was funded by a **SARE (Sustainable Agriculture Research & Education)** grant
+"""
+)
 
 # -----------------------------
 # Sidebar inputs
