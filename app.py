@@ -24,15 +24,6 @@ CV = st.sidebar.number_input("Weight CV", value=0.35, min_value=0.05, max_value=
 MARKET_WEIGHT = st.sidebar.number_input("Market size (g)", value=66.0, min_value=10.0)
 MONTHS_AHEAD = st.sidebar.slider("Months to project", 1, 24, 12)
 
-st.sidebar.header("Model smoothing")
-SPLINE_SMOOTH = st.sidebar.slider(
-    "Monotone spline smoothness (higher = smoother)",
-    min_value=0.0,
-    max_value=5.0,
-    value=2.0,
-    step=0.5,
-    help="0 = follow data closely (more bumps). Higher values apply more smoothing."
-)
 
 st.sidebar.header("Bagging / Splits")
 DENSITY_G_PER_L = st.sidebar.number_input("Density (g/L)", value=1940.85, min_value=100.0)
@@ -467,7 +458,7 @@ if uploaded:
     predict_log_wt = fit_regularized_monotone_spline_log_weight(
         dd["Age_days"].values,
         dd["log_wt"].values,
-        smoothness=float(SPLINE_SMOOTH),
+        smoothness=2.0,
     )
 
     # -----------------------------
@@ -498,17 +489,50 @@ if uploaded:
         end_md   = (b_end.month, b_end.day)
 
         dates = pd.date_range(b_start, end_date, freq="D")
-        growth = np.array([in_window(d, start_md, end_md) for d in dates], dtype=int)
-        age_growing = np.cumsum(growth).astype(float)
+        growth = np.array([in_window(d, start_md, end_md) for d in dates], dtype=int).astype(int)
+
+        # Season-age resets each year at the first GrowthDay after winter/off-season
+        season_age = np.zeros(len(dates), dtype=float)
+        cur = 0.0
+        for i in range(len(dates)):
+            if growth[i] == 1:
+                if i == 0 or growth[i - 1] == 0:
+                    cur = 0.0  # new season starts
+                season_age[i] = cur
+                cur += 1.0
+            else:
+                season_age[i] = cur  # carry last value (not used for growth)
 
         tmp = pd.DataFrame({
             "Bag": bag,
             "Date": dates,
             "GrowthDay": growth.astype(bool),
-            "Age_growing_days": age_growing.astype(float),
+            "Age_growing_days": season_age.astype(float),
         })
 
-        tmp["pred_wt_g"] = np.exp(predict_log_wt(tmp["Age_growing_days"].values))
+        # Build predictions sequentially so winter carries weight forward, and each season follows the same growth shape.
+        # Use the first observed weight for the bag as the initial condition.
+        init_wt = float(g.iloc[0]["Avg_Weight_g"])
+        init_log_wt = np.log(max(init_wt, 1e-9))
+
+        # Precompute relative log-growth within a season: f(t) - f(0)
+        f0 = float(predict_log_wt(np.array([0.0]))[0])
+        rel_log_growth = predict_log_wt(tmp["Age_growing_days"].values) - f0
+
+        pred_log = np.zeros(len(tmp), dtype=float)
+        current_log = init_log_wt
+        season_base_log = init_log_wt
+
+        for i in range(len(tmp)):
+            if tmp.loc[i, "GrowthDay"]:
+                # If this is the first growth day of a season, reset the season base to the current carried weight
+                if i == 0 or (not tmp.loc[i - 1, "GrowthDay"]):
+                    season_base_log = current_log
+                current_log = season_base_log + float(rel_log_growth[i])
+            # else: winter/off-season, carry current_log forward unchanged
+            pred_log[i] = current_log
+
+        tmp["pred_wt_g"] = np.exp(pred_log)
         tmp["pct_ready"] = tmp["pred_wt_g"].apply(lambda x: frac_ready(x, CV, MARKET_WEIGHT)) * 100
 
         if last_counts is not None:
@@ -599,7 +623,6 @@ if uploaded:
 
     ax3.set_xlabel("Date")
 
-    st.caption("Tip: If the predicted curve looks bumpy, increase 'Monotone spline smoothness' in the sidebar.")
     st.pyplot(fig)
 
 
