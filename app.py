@@ -11,9 +11,6 @@ st.markdown(
     """
 **Sampling Protocol & App Guide:**  
 👉 [View the README](README.md)
-
-**Credits:**  
-This work was funded by a **SARE (Sustainable Agriculture Research & Education)** grant
 """
 )
 
@@ -30,7 +27,31 @@ DENSITY_G_PER_L = st.sidebar.number_input("Density (g/L)", value=1940.85, min_va
 SPLIT_FACTOR = st.sidebar.number_input("Split factor (x initial volume)", value=2.0, min_value=1.1, step=0.1)
 INITIAL_VOLUME_L = st.sidebar.number_input("Initial bag volume (L)", value=3.0, min_value=0.1, step=0.5)
 
+
 uploaded = st.sidebar.file_uploader("Upload bio CSV", type=["csv"])
+
+# -----------------------------
+# Sample CSV (for first-time users)
+# -----------------------------
+sample_csv = pd.DataFrame({
+    "Date": pd.to_datetime([
+        "2026-04-15", "2026-04-29", "2026-05-13",
+        "2026-04-15", "2026-04-29", "2026-05-13"
+    ]),
+    "Bag": [
+        "SAMPLE_A", "SAMPLE_A", "SAMPLE_A",
+        "SAMPLE_B", "SAMPLE_B", "SAMPLE_B"
+    ],
+    "Count": [200, 198, 198, 200, 199, 199],
+    "weight_g": [4200, 4554, 4980, 4100, 4480, 4920],
+})
+
+st.sidebar.download_button(
+    "Download sample CSV",
+    sample_csv.to_csv(index=False),
+    file_name="sample_oyster_sampling.csv",
+    mime="text/csv",
+)
 
 # -----------------------------
 # Helpers
@@ -227,5 +248,17 @@ if uploaded:
         "text/csv"
     )
 
+
 else:
     st.info("Upload a bio CSV to begin.")
+
+# -----------------------------
+# Footer credits
+# -----------------------------
+st.markdown(
+    """
+---
+**Credits:**  
+This work was funded by a **SARE (Sustainable Agriculture Research & Education)** grant.
+"""
+)
