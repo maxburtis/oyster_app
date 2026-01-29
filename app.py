@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
+from scipy.stats import norm
+from scipy.interpolate import UnivariateSpline, PchipInterpolator
 import matplotlib.pyplot as plt
 
 st.set_page_config(layout="wide")
@@ -22,6 +24,16 @@ st.sidebar.header("Inputs")
 CV = st.sidebar.number_input("Weight CV", value=0.35, min_value=0.05, max_value=1.0, step=0.05)
 MARKET_WEIGHT = st.sidebar.number_input("Market size (g)", value=66.0, min_value=10.0)
 MONTHS_AHEAD = st.sidebar.slider("Months to project", 1, 24, 12)
+
+st.sidebar.header("Model smoothing")
+SPLINE_SMOOTH = st.sidebar.slider(
+    "Monotone spline smoothness (higher = smoother)",
+    min_value=0.0,
+    max_value=5.0,
+    value=2.0,
+    step=0.5,
+    help="0 = follow data closely (more bumps). Higher values apply more smoothing."
+)
 
 st.sidebar.header("Bagging / Splits")
 DENSITY_G_PER_L = st.sidebar.number_input("Density (g/L)", value=1940.85, min_value=100.0)
@@ -266,6 +278,72 @@ def fit_monotone_log_weight(age_days, log_wt):
     return predict
 
 # -----------------------------
+# Regularized monotone spline helper
+# -----------------------------
+def fit_regularized_monotone_spline_log_weight(age_days, log_wt, smoothness=2.0):
+    """
+    Regularized *monotone* spline for log(weight) vs age.
+    Approach:
+      1) Average duplicates at same age
+      2) Enforce monotonicity with isotonic regression (PAVA)
+      3) Fit a smoothing spline (UnivariateSpline) to the monotone targets
+      4) Enforce monotonicity again by sampling the spline on a grid + PAVA
+      5) Use PCHIP over the monotone spline samples for a smooth monotone predictor
+    This yields a smooth, monotone curve without pyGAM.
+    """
+    age = np.asarray(age_days, dtype=float)
+    y = np.asarray(log_wt, dtype=float)
+
+    mask = np.isfinite(age) & np.isfinite(y)
+    age = age[mask]
+    y = y[mask]
+    if age.size < 2:
+        # degenerate case
+        const = float(np.nanmean(y)) if age.size else 0.0
+        return lambda x_new: np.full_like(np.asarray(x_new, dtype=float), const, dtype=float)
+
+    # sort by age
+    order = np.argsort(age)
+    x = age[order]
+    y_sorted = y[order]
+
+    # average duplicates at same age
+    ux, inv = np.unique(x, return_inverse=True)
+    y_mean = np.zeros_like(ux, dtype=float)
+    counts = np.zeros_like(ux, dtype=float)
+    for i, k in enumerate(inv):
+        y_mean[k] += y_sorted[i]
+        counts[k] += 1.0
+    y_mean /= np.maximum(counts, 1.0)
+
+    # initial monotone target
+    y_iso = _pava(y_mean)
+
+    # smoothing spline: choose s based on smoothness slider and scale of data
+    # s is roughly the allowed sum of squared residuals; scale it with n and smoothness^2
+    n = ux.size
+    base_s = max(n * 0.001, 1e-6)
+    s = base_s * (smoothness ** 2) * n
+
+    # Fit spline to monotone target; k=3 cubic
+    spline = UnivariateSpline(ux, y_iso, s=s, k=min(3, max(1, n - 1)))
+
+    # sample spline on a fine grid and re-enforce monotonicity
+    grid_n = int(max(200, 20 * n))
+    xg = np.linspace(float(ux.min()), float(ux.max()), grid_n)
+    yg = spline(xg)
+    yg_mono = _pava(yg)
+
+    # Smooth monotone interpolator (shape-preserving)
+    pchip = PchipInterpolator(xg, yg_mono, extrapolate=True)
+
+    def predict(x_new):
+        x_new = np.asarray(x_new, dtype=float).reshape(-1)
+        return pchip(x_new)
+
+    return predict
+
+# -----------------------------
 # Main logic
 # -----------------------------
 if uploaded:
@@ -364,9 +442,13 @@ if uploaded:
     dd["log_wt"] = np.log(dd["Avg_Weight_g"])
 
     # -----------------------------
-    # Fit monotone growth curve (isotonic regression)
+    # Fit regularized monotone spline (smooth + monotone)
     # -----------------------------
-    predict_log_wt = fit_monotone_log_weight(dd["Age_days"].values, dd["log_wt"].values)
+    predict_log_wt = fit_regularized_monotone_spline_log_weight(
+        dd["Age_days"].values,
+        dd["log_wt"].values,
+        smoothness=float(SPLINE_SMOOTH),
+    )
 
     # -----------------------------
     # Build projection timeline (per-bag) + split schedule
@@ -498,6 +580,7 @@ if uploaded:
 
     ax3.set_xlabel("Date")
 
+    st.caption("Tip: If the predicted curve looks bumpy, increase 'Monotone spline smoothness' in the sidebar.")
     st.pyplot(fig)
 
 
