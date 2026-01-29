@@ -7,12 +7,14 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(layout="wide")
 st.title("🦪 Oyster Calculator")
-st.markdown(
-    """
-**Sampling Protocol & App Guide:**  
-👉 [View the README](README.md)
-"""
-)
+st.markdown("**Sampling Protocol & App Guide:**")
+
+with st.expander("Open README (Sampling protocol + how to run the app)", expanded=False):
+    try:
+        with open("README.md", "r", encoding="utf-8") as f:
+            st.markdown(f.read())
+    except FileNotFoundError:
+        st.warning("README.md not found in the app directory.")
 
 # -----------------------------
 # Sidebar inputs
@@ -29,6 +31,18 @@ INITIAL_VOLUME_L = st.sidebar.number_input("Initial bag volume (L)", value=3.0, 
 
 
 uploaded = st.sidebar.file_uploader("Upload bio CSV", type=["csv"])
+
+# Offer README as a downloadable file
+try:
+    with open("README.md", "rb") as f:
+        st.sidebar.download_button(
+            "Download README",
+            f,
+            file_name="README.md",
+            mime="text/markdown",
+        )
+except FileNotFoundError:
+    pass
 
 # -----------------------------
 # Sample CSV (for first-time users)
