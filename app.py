@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
-from scipy.stats import norm
 from scipy.interpolate import UnivariateSpline, PchipInterpolator
 import matplotlib.pyplot as plt
 
@@ -335,11 +334,32 @@ def fit_regularized_monotone_spline_log_weight(age_days, log_wt, smoothness=2.0)
     yg_mono = _pava(yg)
 
     # Smooth monotone interpolator (shape-preserving)
-    pchip = PchipInterpolator(xg, yg_mono, extrapolate=True)
+    pchip = PchipInterpolator(xg, yg_mono, extrapolate=False)
 
     def predict(x_new):
         x_new = np.asarray(x_new, dtype=float).reshape(-1)
-        return pchip(x_new)
+
+        # In-range interpolation (PCHIP preserves monotonicity for monotone data)
+        y_pred = pchip(np.clip(x_new, xg[0], xg[-1]))
+
+        # Monotone linear extrapolation outside bounds (force non-negative slope)
+        if xg.size >= 2:
+            m_left = max(0.0, (yg_mono[1] - yg_mono[0]) / (xg[1] - xg[0] + 1e-12))
+            m_right = max(0.0, (yg_mono[-1] - yg_mono[-2]) / (xg[-1] - xg[-2] + 1e-12))
+        else:
+            m_left = 0.0
+            m_right = 0.0
+
+        left_mask = x_new < xg[0]
+        right_mask = x_new > xg[-1]
+
+        if np.any(left_mask):
+            y_pred[left_mask] = yg_mono[0] + m_left * (x_new[left_mask] - xg[0])
+
+        if np.any(right_mask):
+            y_pred[right_mask] = yg_mono[-1] + m_right * (x_new[right_mask] - xg[-1])
+
+        return y_pred
 
     return predict
 
@@ -479,8 +499,7 @@ if uploaded:
 
         dates = pd.date_range(b_start, end_date, freq="D")
         growth = np.array([in_window(d, start_md, end_md) for d in dates], dtype=int)
-        age_growing = np.cumsum(growth) - 1
-        age_growing[age_growing < 0] = 0
+        age_growing = np.cumsum(growth).astype(float)
 
         tmp = pd.DataFrame({
             "Bag": bag,
