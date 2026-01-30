@@ -9,7 +9,7 @@ This app uses biweekly sampling data from oyster grow-out bags to project growth
 
 ### Sampling cadence and design
 - **Frequency:** every 2 weeks during the grow-out season
-- **Per site:** maintain a designated *sample bag* placed near the same location each time (e.g., adjacent to a buoy or representative cage)
+- **Per site:** maintain at least 3 designated *sample bags* placed near the same location each time (e.g., adjacent to a buoy or representative cage)
 - **Initial sample size:** target ~200 oysters per sample bag at the start; continue sampling the same bag over time, adjusting counts as mortalities occur
 
 **Optional (for market density calibration):**
@@ -35,9 +35,7 @@ This app uses biweekly sampling data from oyster grow-out bags to project growth
    - Record:
      - `weight_g` = total live oyster mass (grams)
      - `Count` = number of live oysters
-6. **Compute average weight**
-   - `Avg_Weight_g = weight_g / Count`
-7. **Return to grow-out**
+6. **Return to grow-out**
    - Put oysters back into their gear location until the next sampling interval
 
 ---
