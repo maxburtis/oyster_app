@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
-from scipy.interpolate import UnivariateSpline, PchipInterpolator
+from pygam import LinearGAM, s
 import matplotlib.pyplot as plt
 
 st.set_page_config(layout="wide")
@@ -158,201 +158,6 @@ def in_window(d, start_md, end_md):
     else:
         return md >= start_md or md <= end_md
 
-# -----------------------------
-# Monotone regression helpers (pure numpy isotonic regression)
-# -----------------------------
-def _pava(y, w=None):
-    """
-    Pool Adjacent Violators Algorithm for isotonic regression (non-decreasing).
-    Returns fitted values with the same length as y.
-    """
-    y = np.asarray(y, dtype=float)
-    n = y.size
-    if w is None:
-        w = np.ones(n, dtype=float)
-    else:
-        w = np.asarray(w, dtype=float)
-
-    # Each point starts as its own block
-    v = y.copy()
-    ww = w.copy()
-    start = np.arange(n)
-
-    m = n  # number of active blocks
-    i = 0
-    while i < m - 1:
-        if v[i] <= v[i + 1] + 1e-12:
-            i += 1
-            continue
-
-        # merge blocks i and i+1
-        new_w = ww[i] + ww[i + 1]
-        new_v = (v[i] * ww[i] + v[i + 1] * ww[i + 1]) / new_w
-        v[i] = new_v
-        ww[i] = new_w
-
-        # remove block i+1 by shifting left
-        v[i + 1 : m - 1] = v[i + 2 : m]
-        ww[i + 1 : m - 1] = ww[i + 2 : m]
-        start[i + 1 : m - 1] = start[i + 2 : m]
-        m -= 1
-
-        # step back to check for new violations
-        i = max(i - 1, 0)
-
-    # expand block values back to original length
-    fitted = np.empty(n, dtype=float)
-    block_starts = list(start[:m]) + [n]
-    for bi in range(m):
-        a = block_starts[bi]
-        b = block_starts[bi + 1]
-        fitted[a:b] = v[bi]
-    return fitted
-
-def fit_monotone_log_weight(age_days, log_wt):
-    """
-    Fits a monotone non-decreasing curve of log(weight) vs age_days and returns a predictor.
-    Uses isotonic regression + linear interpolation, with gentle linear extrapolation.
-    """
-    age = np.asarray(age_days, dtype=float)
-    y = np.asarray(log_wt, dtype=float)
-
-    mask = np.isfinite(age) & np.isfinite(y)
-    age = age[mask]
-    y = y[mask]
-
-    # sort by age
-    order = np.argsort(age)
-    x = age[order]
-    y_sorted = y[order]
-
-    # If duplicate x values exist, average them first (stabilizes isotonic fit)
-    ux, inv = np.unique(x, return_inverse=True)
-    y_mean = np.zeros_like(ux, dtype=float)
-    counts = np.zeros_like(ux, dtype=float)
-    for i, k in enumerate(inv):
-        y_mean[k] += y_sorted[i]
-        counts[k] += 1.0
-    y_mean /= np.maximum(counts, 1.0)
-
-    y_fit = _pava(y_mean)
-
-    # slopes for extrapolation
-    def _slope_left():
-        if ux.size < 2:
-            return 0.0
-        dx = ux[1] - ux[0]
-        return 0.0 if dx == 0 else (y_fit[1] - y_fit[0]) / dx
-
-    def _slope_right():
-        if ux.size < 2:
-            return 0.0
-        dx = ux[-1] - ux[-2]
-        return 0.0 if dx == 0 else (y_fit[-1] - y_fit[-2]) / dx
-
-    m_left = _slope_left()
-    m_right = _slope_right()
-
-    def predict(x_new):
-        x_new = np.asarray(x_new, dtype=float).reshape(-1)
-        y_pred = np.interp(x_new, ux, y_fit)
-        # linear extrapolation outside bounds
-        left_mask = x_new < ux[0]
-        right_mask = x_new > ux[-1]
-        if np.any(left_mask):
-            y_pred[left_mask] = y_fit[0] + m_left * (x_new[left_mask] - ux[0])
-        if np.any(right_mask):
-            y_pred[right_mask] = y_fit[-1] + m_right * (x_new[right_mask] - ux[-1])
-        return y_pred
-
-    return predict
-
-# -----------------------------
-# Regularized monotone spline helper
-# -----------------------------
-def fit_regularized_monotone_spline_log_weight(age_days, log_wt, smoothness=2.0):
-    """
-    Regularized *monotone* spline for log(weight) vs age.
-    Approach:
-      1) Average duplicates at same age
-      2) Enforce monotonicity with isotonic regression (PAVA)
-      3) Fit a smoothing spline (UnivariateSpline) to the monotone targets
-      4) Enforce monotonicity again by sampling the spline on a grid + PAVA
-      5) Use PCHIP over the monotone spline samples for a smooth monotone predictor
-    This yields a smooth, monotone curve without pyGAM.
-    """
-    age = np.asarray(age_days, dtype=float)
-    y = np.asarray(log_wt, dtype=float)
-
-    mask = np.isfinite(age) & np.isfinite(y)
-    age = age[mask]
-    y = y[mask]
-    if age.size < 2:
-        # degenerate case
-        const = float(np.nanmean(y)) if age.size else 0.0
-        return lambda x_new: np.full_like(np.asarray(x_new, dtype=float), const, dtype=float)
-
-    # sort by age
-    order = np.argsort(age)
-    x = age[order]
-    y_sorted = y[order]
-
-    # average duplicates at same age
-    ux, inv = np.unique(x, return_inverse=True)
-    y_mean = np.zeros_like(ux, dtype=float)
-    counts = np.zeros_like(ux, dtype=float)
-    for i, k in enumerate(inv):
-        y_mean[k] += y_sorted[i]
-        counts[k] += 1.0
-    y_mean /= np.maximum(counts, 1.0)
-
-    # initial monotone target
-    y_iso = _pava(y_mean)
-
-    # smoothing spline: choose s based on smoothness slider and scale of data
-    # s is roughly the allowed sum of squared residuals; scale it with n and smoothness^2
-    n = ux.size
-    base_s = max(n * 0.001, 1e-6)
-    s = base_s * (smoothness ** 2) * n
-
-    # Fit spline to monotone target; k=3 cubic
-    spline = UnivariateSpline(ux, y_iso, s=s, k=min(3, max(1, n - 1)))
-
-    # sample spline on a fine grid and re-enforce monotonicity
-    grid_n = int(max(200, 20 * n))
-    xg = np.linspace(float(ux.min()), float(ux.max()), grid_n)
-    yg = spline(xg)
-    yg_mono = _pava(yg)
-
-    # Smooth monotone interpolator (shape-preserving)
-    pchip = PchipInterpolator(xg, yg_mono, extrapolate=False)
-
-    def predict(x_new):
-        x_new = np.asarray(x_new, dtype=float).reshape(-1)
-
-        # In-range interpolation (PCHIP preserves monotonicity for monotone data)
-        y_pred = pchip(np.clip(x_new, xg[0], xg[-1]))
-
-        # Monotone linear extrapolation outside bounds (force non-negative slope)
-        if xg.size >= 2:
-            m_left = max(0.0, (yg_mono[1] - yg_mono[0]) / (xg[1] - xg[0] + 1e-12))
-            m_right = max(0.0, (yg_mono[-1] - yg_mono[-2]) / (xg[-1] - xg[-2] + 1e-12))
-        else:
-            m_left = 0.0
-            m_right = 0.0
-
-        left_mask = x_new < xg[0]
-        right_mask = x_new > xg[-1]
-
-        if np.any(left_mask):
-            y_pred[left_mask] = yg_mono[0] + m_left * (x_new[left_mask] - xg[0])
-
-        if np.any(right_mask):
-            y_pred[right_mask] = yg_mono[-1] + m_right * (x_new[right_mask] - xg[-1])
-
-        return y_pred
-
-    return predict
 
 # -----------------------------
 # Main logic
@@ -453,13 +258,14 @@ if uploaded:
     dd["log_wt"] = np.log(dd["Avg_Weight_g"])
 
     # -----------------------------
-    # Fit regularized monotone spline (smooth + monotone)
+    # Fit monotone GAM on Age_days (pyGAM)
     # -----------------------------
-    predict_log_wt = fit_regularized_monotone_spline_log_weight(
-        dd["Age_days"].values,
-        dd["log_wt"].values,
-        smoothness=2.0,
-    )
+    X = dd[["Age_days"]].values
+    y = dd["log_wt"].values
+
+    gam = LinearGAM(
+        s(0, n_splines=12, constraints="monotonic_inc")
+    ).fit(X, y)
 
     # -----------------------------
     # Build projection timeline (per-bag) + split schedule
@@ -515,9 +321,9 @@ if uploaded:
         init_wt = float(g.iloc[0]["Avg_Weight_g"])
         init_log_wt = np.log(max(init_wt, 1e-9))
 
-        # Precompute relative log-growth within a season: f(t) - f(0)
-        f0 = float(predict_log_wt(np.array([0.0]))[0])
-        rel_log_growth = predict_log_wt(tmp["Age_growing_days"].values) - f0
+        # Precompute relative log-growth within a season: f(t) - f(0) using monotone GAM
+        f0 = float(gam.predict(np.array([[0.0]]))[0])
+        rel_log_growth = gam.predict(tmp[["Age_growing_days"]].values) - f0
 
         pred_log = np.zeros(len(tmp), dtype=float)
         current_log = init_log_wt
