@@ -297,48 +297,27 @@ if uploaded:
         dates = pd.date_range(b_start, end_date, freq="D")
         growth = np.array([in_window(d, start_md, end_md) for d in dates], dtype=int).astype(int)
 
-        # Season-age resets each year at the first GrowthDay after winter/off-season
-        season_age = np.zeros(len(dates), dtype=float)
-        cur = 0.0
-        for i in range(len(dates)):
-            if growth[i] == 1:
-                if i == 0 or growth[i - 1] == 0:
-                    cur = 0.0  # new season starts
-                season_age[i] = cur
-                cur += 1.0
-            else:
-                season_age[i] = cur  # carry last value (not used for growth)
+        # Cumulative "biological" age increases only on GrowthDay and NEVER resets.
+        bio_age = np.cumsum(growth).astype(float)
 
         tmp = pd.DataFrame({
             "Bag": bag,
             "Date": dates,
             "GrowthDay": growth.astype(bool),
-            "Age_growing_days": season_age.astype(float),
+            "Age_bio_days": bio_age,
         })
 
-        # Build predictions sequentially so winter carries weight forward, and each season follows the same growth shape.
-        # Use the first observed weight for the bag as the initial condition.
+        # Predict using biological age so growth rate naturally slows as oysters get larger.
+        # Anchor each bag to its initial observed weight so projections start at the observed baseline.
         init_wt = float(g.iloc[0]["Avg_Weight_g"])
         init_log_wt = np.log(max(init_wt, 1e-9))
 
-        # Precompute relative log-growth within a season: f(t) - f(0) using monotone GAM
         f0 = float(gam.predict(np.array([[0.0]]))[0])
-        rel_log_growth = gam.predict(tmp[["Age_growing_days"]].values) - f0
+        rel_log_growth = gam.predict(tmp[["Age_bio_days"]].values) - f0
 
-        pred_log = np.zeros(len(tmp), dtype=float)
-        current_log = init_log_wt
-        season_base_log = init_log_wt
-
-        for i in range(len(tmp)):
-            if tmp.loc[i, "GrowthDay"]:
-                # If this is the first growth day of a season, reset the season base to the current carried weight
-                if i == 0 or (not tmp.loc[i - 1, "GrowthDay"]):
-                    season_base_log = current_log
-                current_log = season_base_log + float(rel_log_growth[i])
-            # else: winter/off-season, carry current_log forward unchanged
-            pred_log[i] = current_log
-
-        tmp["pred_wt_g"] = np.exp(pred_log)
+        tmp["pred_wt_g"] = np.exp(init_log_wt + rel_log_growth)
+        # Numerical safety: enforce non-decreasing weights over time
+        tmp["pred_wt_g"] = np.maximum.accumulate(tmp["pred_wt_g"].values)
         tmp["pct_ready"] = tmp["pred_wt_g"].apply(lambda x: frac_ready(x, CV, MARKET_WEIGHT)) * 100
 
         if last_counts is not None:
